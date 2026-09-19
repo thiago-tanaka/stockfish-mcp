@@ -40,21 +40,30 @@ mates.
 
 ## Installing the engine
 
-Ubuntu, and anywhere else x86-64:
+Pick the build for the machine's architecture — `uname -m` tells you which:
 
 ```bash
-curl -sSL -o stockfish.tar.gz \
-  https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-linux-x86-64-universal.tar.gz
-tar xzf stockfish.tar.gz
-sudo install -m 755 stockfish/stockfish-linux-x86-64-universal /usr/local/bin/stockfish
+case "$(uname -m)" in
+  x86_64)  ARCH=x86-64 ;;
+  aarch64) ARCH=arm64 ;;
+  *) echo "Unsupported: $(uname -m)"; exit 1 ;;
+esac
+
+curl -sSL -o /tmp/stockfish.tar.gz \
+  "https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-linux-${ARCH}-universal.tar.gz"
+tar xzf /tmp/stockfish.tar.gz -C /tmp
+sudo install -m 755 "/tmp/stockfish/stockfish-linux-${ARCH}-universal" /usr/local/bin/stockfish
 ```
 
-There is no build to choose. Stockfish used to ship one binary per instruction set — `bmi2`,
-`avx2`, `avx512`, `vnni512` — and picking the wrong one for the CPU gave you `Illegal
-instruction` on the first search. Since Stockfish 18 the Linux x86-64 download is a single
-universal binary that detects the CPU and runs the best code it has. Take it from the
-[official release](https://github.com/official-stockfish/Stockfish/releases) rather than from
-`apt`, which lags several major versions behind.
+Architecture is the one choice left, and getting it wrong gives `Exec format error` on the
+first search — worth checking on ARM hosts, which is most of the cheaper cloud instances now
+(AWS Graviton, Ampere, Apple silicon). Within an architecture there is nothing to pick:
+Stockfish used to ship one x86-64 binary per instruction set — `bmi2`, `avx2`, `avx512`,
+`vnni512` — and the wrong one gave `Illegal instruction`. Since Stockfish 18 each
+architecture is a single universal binary that detects the CPU and runs the best code it has.
+
+Take it from the [official release](https://github.com/official-stockfish/Stockfish/releases)
+rather than from `apt`, which lags several major versions behind.
 
 `apt install stockfish` works, and gets you an engine a few hundred Elo weaker. It is fine
 for development and not worth it in production.
@@ -96,6 +105,12 @@ Everything lives in `config/chess.php`. The defaults are sized for one engine pr
 | `CHESS_ANALYSIS_JOB_TIMEOUT` | `1800` | Ceiling for a whole game. |
 | `CHESS_SCORE_BOUND` | `1500` | Where centipawn differences stop meaning anything. |
 | `MCP_REDIRECT_DOMAINS` | `https://claude.ai` | Add `http://localhost` to use the MCP Inspector. |
+
+**On memory.** An engine process holds roughly 300 MB resident before its hash table is
+counted — the evaluation network is large and lives in memory. That is per process, and a web
+request and each queue worker hold their own, so a small host wants `STOCKFISH_HASH_MB` down
+at 16 or 32 and a single worker. Raising the hash buys little at depth 16 and is the first
+thing to trade away when the box is tight.
 
 **On threads.** The obvious setting is `nproc - 1`, and it is wrong here. A web request and
 each queue worker hold their own Stockfish, so that figure is only right while exactly one of

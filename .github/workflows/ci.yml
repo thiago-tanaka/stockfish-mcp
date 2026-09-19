@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite, redis
+          coverage: none
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ hashFiles('composer.lock') }}
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # The engine tests are the only ones that prove the UCI dialogue works, so CI installs
+      # a real binary rather than skipping them. The Linux build is universal: it selects the
+      # instructions for whatever CPU the runner turns out to have.
+      - name: Install Stockfish
+        run: |
+          curl -sSL -o stockfish.tar.gz \
+            https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-linux-x86-64-universal.tar.gz
+          tar xzf stockfish.tar.gz
+          sudo install -m 755 stockfish/stockfish-linux-x86-64-universal /usr/local/bin/stockfish
+          stockfish --help | head -n 1 || true
+
+      - name: Prepare the application
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan passport:keys
+
+      - name: Check formatting
+        run: composer run lint:check
+
+      - name: Check types
+        run: composer run types
+
+      - name: Run tests
+        run: php artisan test
+        env:
+          STOCKFISH_PATH: /usr/local/bin/stockfish

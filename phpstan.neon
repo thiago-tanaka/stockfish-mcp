@@ -1,0 +1,15 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    paths:
+        - app
+        - config
+        - database
+        - routes
+        - tests
+
+    level: 6
+
+    checkMissingCallableSignature: true
+    treatPhpDocTypesAsCertain: false

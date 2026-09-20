@@ -1,0 +1,122 @@
+# Aplicado automaticamente pelo `docker compose` quando está presente, o que faz deste o
+# arquivo de desenvolvimento. Em produção ele não existe (ou se usa -f docker-compose.yml
+# explicitamente), e o compose base vale sozinho.
+#
+# As diferenças em relação a produção são três: a imagem é construída aqui em vez de vir do
+# registry, o código é montado do disco para não precisar rebuildar a cada alteração, e o
+# banco e o Redis ficam acessíveis do host para inspeção.
+
+services:
+  app:
+    build:
+      context: .
+      target: app
+    image: stockfish-mcp:dev
+    # O phpdotenv não sobrescreve variável que já existe no ambiente, então o que está aqui
+    # vence o .env do host. É o que permite manter um único .env servindo tanto a execução
+    # nativa no WSL (Stockfish em ~/.local/bin, SQLite) quanto os containers, sem editar
+    # nada ao trocar de um para o outro.
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      HOME: /tmp
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_STORE: redis
+      STOCKFISH_PATH: /usr/local/bin/stockfish
+    volumes:
+      # Código do host por cima da imagem: alterar um arquivo vale na próxima requisição.
+      - .:/var/www/html
+      # Listas de volumes são mescladas entre os arquivos do compose, com dedupe pelo
+      # caminho de destino -- não substituídas. Declarar o mesmo destino aqui é o que anula
+      # os volumes nomeados do compose base, que em produção guardam estado entre deploys e
+      # aqui só atrapalhariam: nascem com dono www-data e o container roda com o seu UID.
+      - ./storage:/var/www/html/storage
+      # Somente leitura de propósito: o entrypoint testa se /srv/public é gravável para
+      # decidir se copia public/ para lá. Em desenvolvimento não deve copiar -- o Caddy já
+      # lê ./public do disco -- e um bind gravável faria o cp copiar sobre si mesmo.
+      - ./public:/srv/public:ro
+    # O código montado pertence ao seu usuário no host. Sem isto, o processo dentro do
+    # container escreve em storage/ como www-data e os arquivos aparecem como de outro dono
+    # no WSL -- ou nem chegam a ser escritos.
+    user: "${UID:-1000}:${GID:-1000}"
+
+  worker:
+    build:
+      context: .
+      target: app
+    image: stockfish-mcp:dev
+    environment:
+      APP_ENV: local
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: database
+      STOCKFISH_PATH: /usr/local/bin/stockfish
+    volumes:
+      - .:/var/www/html
+      - ./storage:/var/www/html/storage
+    user: "${UID:-1000}:${GID:-1000}"
+
+  web:
+    environment:
+      # Sem domínio, o Caddy serve HTTP puro e não tenta emitir certificado.
+      SITE_ADDRESS: ":80"
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mesmo destino do compose base, então substitui o volume nomeado: em desenvolvimento
+      # o Caddy lê public/ direto do disco, e uma alteração vale na hora.
+      - ./public:/var/www/html/public:ro
+
+  # Roda a suíte com um ambiente próprio, e por isso é um serviço e não um `exec` no app.
+  #
+  # As variáveis do container têm precedência sobre o .env -- é o comportamento certo para
+  # produção, e o que atrapalha aqui: `exec app vendor/bin/phpunit` herdaria APP_ENV=local,
+  # CACHE_STORE=redis e o MySQL real, e a suíte passaria a depender do estado deles. Nem
+  # force="true" no phpunit.xml resolve, porque o helper env() do Laravel lê do repositório
+  # do Dotenv, que já foi populado pelo ambiente.
+  #
+  #   docker compose run --rm test
+  #
+  test:
+    build:
+      context: .
+      target: app
+    image: stockfish-mcp:dev
+    profiles: ["test"]
+    environment:
+      APP_ENV: testing
+      APP_DEBUG: "true"
+      HOME: /tmp
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      MAIL_MAILER: array
+      BCRYPT_ROUNDS: "4"
+      STOCKFISH_PATH: /usr/local/bin/stockfish
+    volumes:
+      - .:/var/www/html
+      - ./storage:/var/www/html/storage
+    user: "${UID:-1000}:${GID:-1000}"
+    command: vendor/bin/phpunit
+
+  # Expostos só para inspeção do host (cliente de banco, redis-cli). Portas altas de
+  # propósito: 3307 e 6380 costumam já estar tomadas por outros serviços, e o Docker
+  # Desktop falha o `up` inteiro quando uma delas está ocupada.
+  mysql:
+    ports:
+      - "13306:3306"
+
+  redis:
+    ports:
+      - "16379:6379"

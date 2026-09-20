@@ -120,6 +120,48 @@ keeps them independent, and buys something else: a single-threaded search is det
 the same position at the same depth gives the same answer, which is what makes the position
 cache sound and the tests repeatable.
 
+## Running it with Docker
+
+The engine, PHP and its extensions all come in the image, so nothing has to be installed
+first:
+
+```bash
+cp .env.docker.example .env        # set DB_PASSWORD
+export UID GID                     # the dev compose runs as your user
+docker compose build
+docker compose run --rm app php artisan key:generate
+docker compose up -d
+```
+
+The site is then on http://localhost:8080. `docker compose logs app` ends in "The engine is
+answering" when the stack is up — the entrypoint runs `chess:engine` on every start, so a
+broken or missing binary is reported there rather than at the first tool call.
+
+Tests run through their own service, not through the app container:
+
+```bash
+docker compose run --rm test
+```
+
+That is deliberate. Environment variables set on a container take precedence over `.env`,
+which is what you want in production and exactly what you do not want in a test run: the
+suite would inherit `APP_ENV=local` and the real cache and database, and its results would
+depend on them. The `test` service supplies its own environment instead.
+
+### Two architectures, one Dockerfile
+
+The image is built for both `linux/amd64` and `linux/arm64` — most cheap cloud instances are
+ARM now, and the engine is a native binary. `TARGETARCH`, which buildx fills in, decides
+which Stockfish is downloaded, and the build runs `uci` against it: a mismatch fails the
+build instead of surfacing as `Exec format error` in production.
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t stockfish-mcp .
+```
+
+Building the foreign architecture locally goes through QEMU and takes minutes rather than
+seconds. In CI, where both are built on native runners, it is quick.
+
 ## Deploying to Forge
 
 1. **Provision** a site with PHP 8.4 and Redis. Analysis is CPU-bound — an engine search

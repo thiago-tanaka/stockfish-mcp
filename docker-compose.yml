@@ -1,0 +1,94 @@
+# A definição de produção. docker-compose.override.yml, aplicado automaticamente em
+# desenvolvimento, é quem troca a imagem por um build local e monta o código.
+
+services:
+  app:
+    image: ${APP_IMAGE:-ghcr.io/thiago-tanaka/stockfish-mcp:latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Só este serviço migra; o worker usa o mesmo banco já migrado.
+      RUN_MIGRATIONS: "true"
+    volumes:
+      - app-storage:/var/www/html/storage
+      # O Caddy precisa enxergar public/ para resolver try_files antes de mandar ao FPM,
+      # mas o código vive dentro da imagem. O entrypoint copia public/ para cá a cada
+      # start, então um deploy com arquivos novos atualiza o que o Caddy serve.
+      - app-public:/srv/public
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Mesma imagem, outro comando. O worker é um processo separado porque o perfil de uso é
+  # outro: o web atende picos curtos, o worker segura um núcleo por minutos.
+  worker:
+    image: ${APP_IMAGE:-ghcr.io/thiago-tanaka/stockfish-mcp:latest}
+    restart: unless-stopped
+    env_file: .env
+    command: php artisan queue:work --queue=default --sleep=3 --tries=1 --timeout=1800 --memory=256
+    volumes:
+      - app-storage:/var/www/html/storage
+    # Docker envia SIGTERM e espera: tempo para o worker terminar a análise em curso em vez
+    # de ser morto no meio dela.
+    stop_grace_period: 1m
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mesmo caminho que o app usa: o SCRIPT_FILENAME que o Caddy monta tem de bater com
+      # o caminho real do arquivo dentro do container do PHP.
+      - app-public:/var/www/html/public:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-stockfish_mcp}
+      MYSQL_USER: ${DB_USERNAME:-stockfish}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # É o que faz o depends_on dos outros serviços esperar o banco aceitar conexão, e não
+      # apenas o processo ter iniciado.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Cache de posições é reconstituível: se o Redis reiniciar, o pior que acontece é a
+    # próxima análise ser lenta. Não vale pagar fsync por isso.
+    command: redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+
+volumes:
+  mysql-data:
+  redis-data:
+  caddy-data:
+  caddy-config:
+  app-storage:
+  app-public:

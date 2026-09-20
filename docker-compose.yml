@@ -58,8 +58,11 @@ services:
     depends_on:
       - app
 
+  # 9.7, not 8.4 or 26.7: 9.7 is the current LTS (supported to April 2034), 8.4 is the
+  # previous one (April 2032), and the 26.x calendar-versioned releases are Innovation --
+  # supported only until the next quarterly ships, which is the wrong trade for a database.
   mysql:
-    image: mysql:8.4
+    image: mysql:9.7
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${DB_DATABASE:-stockfish_mcp}
@@ -78,7 +81,7 @@ services:
       start_period: 30s
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     restart: unless-stopped
     # The position cache is reproducible: if Redis restarts, the worst outcome is that the
     # next analysis is slow. Not worth paying fsync for.

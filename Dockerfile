@@ -59,21 +59,24 @@ RUN composer dump-autoload --optimize --no-dev --classmap-authoritative
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
-FROM php:8.4-fpm-trixie AS app
+FROM php:8.5-fpm-trixie AS app
 
 # pdo_mysql and redis are the database and the cache; pcntl is how queue:work hears the stop
 # signals, without which a deploy kills a worker mid-analysis; opcache is throughput.
-RUN set -eux; \
-    savedAptMark="$(apt-mark showmanual)"; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends $PHPIZE_DEPS; \
-    docker-php-ext-install -j"$(nproc)" pdo_mysql pcntl opcache; \
-    pecl install redis; \
-    docker-php-ext-enable redis; \
-    apt-mark auto '.*' > /dev/null; \
-    apt-mark manual $savedAptMark > /dev/null; \
-    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false $PHPIZE_DEPS; \
-    rm -rf /var/lib/apt/lists/* /tmp/pear
+#
+# Installed through mlocati's helper rather than pecl directly. Building phpredis by hand
+# here failed on "cp: cannot stat 'modules/*'" -- its install target does not survive the
+# parallel make that the surrounding build uses -- and the helper also pulls the system
+# libraries each extension needs and removes the build dependencies afterwards.
+#
+# Pinned to a release, not "latest": an image that installs whatever is newest at build time
+# is not reproducible, which is most of the reason to have an image at all.
+ARG PHP_EXT_INSTALLER_VERSION=2.11.27
+ADD --chmod=0755 \
+    https://github.com/mlocati/docker-php-extension-installer/releases/download/${PHP_EXT_INSTALLER_VERSION}/install-php-extensions \
+    /usr/local/bin/install-php-extensions
+RUN install-php-extensions pdo_mysql redis pcntl opcache \
+ && rm -f /usr/local/bin/install-php-extensions
 
 COPY docker/php.ini /usr/local/etc/php/conf.d/app.ini
 COPY --from=engine /usr/local/bin/stockfish /usr/local/bin/stockfish

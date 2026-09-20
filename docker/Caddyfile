@@ -1,13 +1,14 @@
-# Caddy obtém e renova o certificado Let's Encrypt sozinho, desde que SITE_ADDRESS seja um
-# domínio público que aponte para cá. É o que substitui o SSL de um clique do Forge.
+# Caddy obtains and renews the Let's Encrypt certificate by itself, as long as SITE_ADDRESS
+# is a public domain pointing here. It is what replaces the platform's one-click SSL.
 #
-# Em desenvolvimento SITE_ADDRESS é :80 e ele serve HTTP puro, sem tentar certificado.
+# In development SITE_ADDRESS is :80, and it serves plain HTTP without attempting a
+# certificate.
 {$SITE_ADDRESS::80} {
 	root * /var/www/html/public
 
-	# O PHP roda noutro container; "app" é o nome do serviço na rede do compose.
+	# PHP runs in another container; "app" is the service name on the compose network.
 	php_fastcgi app:9000 {
-		# Uma análise em profundidade alta passa muito do padrão de 60s.
+		# A search at high depth runs well past the 60s default.
 		read_timeout 300s
 	}
 

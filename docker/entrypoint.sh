@@ -1,12 +1,13 @@
 #!/bin/sh
-# Preparo antes de entregar o controle ao php-fpm ou ao worker.
+# Preparation before handing control to php-fpm or to the worker.
 #
-# O que roda aqui roda a cada start do container, então tudo precisa ser idempotente:
-# um container reiniciado pelo Docker tem de chegar ao mesmo estado de um recém-criado.
+# Everything here runs on every container start, so all of it has to be idempotent: a
+# container the daemon restarted must reach the same state as a freshly created one.
 set -e
 
-# O banco sobe em paralelo, e o depends_on do compose só garante a ordem de partida, não
-# que o MySQL já aceite conexão. Sem esta espera, o primeiro start depois de um `up` falha.
+# The database starts in parallel, and compose's depends_on only orders the starts -- it
+# does not promise MySQL is accepting connections. Without this wait, the first start after
+# an `up` fails.
 if [ -n "${DB_HOST:-}" ]; then
     echo "Waiting for ${DB_HOST}:${DB_PORT:-3306}..."
     i=0
@@ -20,14 +21,14 @@ if [ -n "${DB_HOST:-}" ]; then
     done
 fi
 
-# Só o serviço que declara RUN_MIGRATIONS migra. Se app e worker migrassem juntos, duas
-# conexões correriam a mesma migration ao mesmo tempo.
+# Only the service that declares RUN_MIGRATIONS migrates. If app and worker both did, two
+# connections would race the same migration.
 if [ "${RUN_MIGRATIONS:-false}" = "true" ]; then
     php artisan migrate --force
 fi
 
-# Em produção o cache de config e rotas vale muito; em desenvolvimento ele esconde toda
-# alteração de .env e de rota atrás de um clear manual.
+# Caching config and routes is worth a lot in production; in development it hides every
+# change to .env and to routes behind a manual clear.
 if [ "${APP_ENV:-production}" = "production" ]; then
     php artisan config:cache
     php artisan route:cache
@@ -37,17 +38,18 @@ else
     php artisan route:clear
 fi
 
-# public/ vive na imagem, mas quem o serve é o container do Caddy. Copiar a cada start
-# mantém os dois em dia sem que o Caddy precise de uma imagem própria a cada deploy.
-# Em desenvolvimento o Caddy monta ./public do host e este diretório não é gravável pelo
-# UID do host; ali a cópia é desnecessária, e testar por -w é o que distingue os dois casos
-# sem precisar de uma variável a mais.
+# public/ lives in the image, but Caddy is what serves it. Copying on each start keeps the
+# two in step without giving Caddy an image of its own for every deploy.
+#
+# In development Caddy mounts ./public from the host and this path is not writable by the
+# host UID; there the copy is pointless, and testing for -w is what tells the two cases
+# apart without another variable.
 if [ -d /srv/public ] && [ -w /srv/public ]; then
     cp -a /var/www/html/public/. /srv/public/
 fi
 
-# O motor é a dependência que mais silenciosamente quebra (arquitetura errada, binário
-# ausente). Melhor gritar no start do que devolver erro na primeira ferramenta chamada.
+# The engine is the dependency that breaks most quietly -- wrong architecture, missing
+# binary. Better to say so at start than to return an error on the first tool call.
 php artisan chess:engine
 
 exec "$@"

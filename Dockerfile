@@ -1,20 +1,20 @@
 # syntax=docker/dockerfile:1
 
-# A imagem carrega a aplicação e o motor. É a mesma em desenvolvimento e em produção:
-# o que muda entre os dois é o compose que a usa, não o que está dentro dela.
+# The image carries the application and the engine. It is the same one in development and in
+# production: what differs between them is the compose file that uses it, not its contents.
 #
-# Duas escolhas não são negociáveis aqui:
+# Two choices here are not negotiable:
 #
-#  - Debian, não Alpine. O binário oficial do Stockfish é linkado dinamicamente contra
-#    glibc (libc.so.6, libm.so.6); em Alpine, que usa musl, ele nem carrega. O binário pede
-#    no máximo GLIBC_2.35, e trixie traz 2.41 -- folga suficiente para não prender a imagem
-#    a uma versão antiga de Debian só por causa do motor.
-#  - O motor é baixado por arquitetura. O build roda em x86_64 e o servidor é ARM
-#    (Graviton), então TARGETARCH -- preenchido pelo buildx -- decide qual binário entra.
-#    Baixar o errado dá "Exec format error" só quando alguém chama uma ferramenta.
+#  - Debian, not Alpine. The official Stockfish binary is dynamically linked against glibc
+#    (libc.so.6, libm.so.6) and will not even load under musl. It asks for at most
+#    GLIBC_2.35, and trixie ships 2.41 -- enough headroom that the engine does not pin the
+#    image to an old Debian.
+#  - The engine is fetched per architecture. Builds happen on x86_64 and the server is ARM
+#    (Graviton), so TARGETARCH -- filled in by buildx -- decides which binary goes in.
+#    Getting it wrong surfaces as "Exec format error" only when a tool is called.
 
 # ---------------------------------------------------------------------------
-# Motor
+# Engine
 # ---------------------------------------------------------------------------
 FROM debian:trixie-slim AS engine
 
@@ -35,18 +35,19 @@ RUN set -eux; \
       "https://github.com/official-stockfish/Stockfish/releases/download/${STOCKFISH_VERSION}/stockfish-linux-${SF_ARCH}-universal.tar.gz"; \
     tar xzf /tmp/stockfish.tar.gz -C /tmp; \
     install -m 755 "/tmp/stockfish/stockfish-linux-${SF_ARCH}-universal" /usr/local/bin/stockfish; \
-    # Falha o build aqui, e não em produção, se o binário for da arquitetura errada.
+    # Greet the engine here, so a binary for the wrong architecture fails the build rather
+    # than production.
     printf 'uci\nquit\n' | /usr/local/bin/stockfish | grep -q '^uciok$'
 
 # ---------------------------------------------------------------------------
-# Dependências PHP
+# PHP dependencies
 # ---------------------------------------------------------------------------
 FROM composer:2 AS vendor
 
 WORKDIR /app
 
-# Só os manifestos primeiro: enquanto composer.lock não mudar, esta camada é reaproveitada
-# e o install inteiro sai do cache.
+# Manifests first: while composer.lock is unchanged this layer is reused and the whole
+# install comes from cache.
 COPY composer.json composer.lock ./
 RUN composer install \
       --no-dev --no-scripts --no-autoloader \
@@ -60,8 +61,8 @@ RUN composer dump-autoload --optimize --no-dev --classmap-authoritative
 # ---------------------------------------------------------------------------
 FROM php:8.4-fpm-trixie AS app
 
-# pdo_mysql e redis são o banco e o cache; pcntl é como o queue:work escuta os sinais de
-# parada (sem ele um deploy mata o worker no meio de uma análise); opcache é desempenho.
+# pdo_mysql and redis are the database and the cache; pcntl is how queue:work hears the stop
+# signals, without which a deploy kills a worker mid-analysis; opcache is throughput.
 RUN set -eux; \
     savedAptMark="$(apt-mark showmanual)"; \
     apt-get update; \
@@ -81,19 +82,19 @@ WORKDIR /var/www/html
 
 COPY --from=vendor --chown=www-data:www-data /app .
 
-# storage/ e bootstrap/cache são os dois lugares onde a aplicação escreve.
+# storage/ and bootstrap/cache are the two places the application writes to.
 RUN chown -R www-data:www-data storage bootstrap/cache
 
-# Ponto de montagem do volume que o Caddy lê. Precisa existir na imagem, e pertencer a
-# www-data: um volume nomeado herda dono e permissão do diretório que cobre, e sobre um
-# caminho inexistente nasceria como root, sem escrita para o processo.
+# Mount point for the volume Caddy reads. It has to exist in the image, and belong to
+# www-data: a named volume inherits the owner and mode of the directory it covers, and over
+# a path that does not exist it would be created as root, with nothing writable.
 RUN mkdir -p /srv/public && chown www-data:www-data /srv/public
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint
 
-# O motor é o que mais custa aqui, então vale checar que ele responde e não só que o
-# processo subiu.
+# The engine is the expensive part, so health means it answers -- not merely that the
+# process started.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
   CMD printf 'uci\nquit\n' | stockfish | grep -q '^uciok$' || exit 1
 

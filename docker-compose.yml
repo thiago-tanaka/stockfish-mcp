@@ -1,5 +1,5 @@
-# A definição de produção. docker-compose.override.yml, aplicado automaticamente em
-# desenvolvimento, é quem troca a imagem por um build local e monta o código.
+# The production definition. docker-compose.override.yml, applied automatically in
+# development, is what swaps the image for a local build and mounts the code.
 
 services:
   app:
@@ -7,13 +7,13 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Só este serviço migra; o worker usa o mesmo banco já migrado.
+      # Only this service migrates; the worker uses the database it already migrated.
       RUN_MIGRATIONS: "true"
     volumes:
       - app-storage:/var/www/html/storage
-      # O Caddy precisa enxergar public/ para resolver try_files antes de mandar ao FPM,
-      # mas o código vive dentro da imagem. O entrypoint copia public/ para cá a cada
-      # start, então um deploy com arquivos novos atualiza o que o Caddy serve.
+      # Caddy needs to see public/ to resolve try_files before handing off to FPM, but the
+      # code lives inside the image. The entrypoint copies public/ here on each start, so a
+      # deploy with new files updates what Caddy serves.
       - app-public:/srv/public
     depends_on:
       mysql:
@@ -21,8 +21,9 @@ services:
       redis:
         condition: service_started
 
-  # Mesma imagem, outro comando. O worker é um processo separado porque o perfil de uso é
-  # outro: o web atende picos curtos, o worker segura um núcleo por minutos.
+  # Same image, different command. The worker is a separate process because its usage
+  # profile is the opposite: the web side serves short bursts, the worker holds a core for
+  # minutes.
   worker:
     image: ${APP_IMAGE:-ghcr.io/thiago-tanaka/stockfish-mcp:latest}
     restart: unless-stopped
@@ -30,8 +31,8 @@ services:
     command: php artisan queue:work --queue=default --sleep=3 --tries=1 --timeout=1800 --memory=256
     volumes:
       - app-storage:/var/www/html/storage
-    # Docker envia SIGTERM e espera: tempo para o worker terminar a análise em curso em vez
-    # de ser morto no meio dela.
+    # Docker sends SIGTERM and waits: room for the worker to finish the analysis in flight
+    # instead of being killed halfway through it.
     stop_grace_period: 1m
     depends_on:
       mysql:
@@ -49,8 +50,8 @@ services:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Mesmo caminho que o app usa: o SCRIPT_FILENAME que o Caddy monta tem de bater com
-      # o caminho real do arquivo dentro do container do PHP.
+      # Same path the app uses: the SCRIPT_FILENAME Caddy builds has to match the real path
+      # of the file inside the PHP container.
       - app-public:/var/www/html/public:ro
       - caddy-data:/data
       - caddy-config:/config
@@ -63,13 +64,13 @@ services:
     environment:
       MYSQL_DATABASE: ${DB_DATABASE:-stockfish_mcp}
       MYSQL_USER: ${DB_USERNAME:-stockfish}
-      MYSQL_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
       MYSQL_RANDOM_ROOT_PASSWORD: "yes"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      # É o que faz o depends_on dos outros serviços esperar o banco aceitar conexão, e não
-      # apenas o processo ter iniciado.
+      # This is what makes the other services' depends_on wait for the database to accept
+      # connections, rather than merely for the process to have started.
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
       interval: 5s
       timeout: 5s
@@ -79,8 +80,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # Cache de posições é reconstituível: se o Redis reiniciar, o pior que acontece é a
-    # próxima análise ser lenta. Não vale pagar fsync por isso.
+    # The position cache is reproducible: if Redis restarts, the worst outcome is that the
+    # next analysis is slow. Not worth paying fsync for.
     command: redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data

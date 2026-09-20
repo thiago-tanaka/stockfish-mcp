@@ -1,10 +1,10 @@
-# Aplicado automaticamente pelo `docker compose` quando está presente, o que faz deste o
-# arquivo de desenvolvimento. Em produção ele não existe (ou se usa -f docker-compose.yml
-# explicitamente), e o compose base vale sozinho.
+# Applied automatically by `docker compose` when present, which makes this the development
+# file. In production it is absent (or docker-compose.yml is named explicitly with -f) and
+# the base file stands alone.
 #
-# As diferenças em relação a produção são três: a imagem é construída aqui em vez de vir do
-# registry, o código é montado do disco para não precisar rebuildar a cada alteração, e o
-# banco e o Redis ficam acessíveis do host para inspeção.
+# Three things differ from production: the image is built here instead of pulled from the
+# registry, the code is mounted from disk so a change does not need a rebuild, and the
+# database and Redis are reachable from the host for inspection.
 
 services:
   app:
@@ -12,13 +12,16 @@ services:
       context: .
       target: app
     image: stockfish-mcp:dev
-    # O phpdotenv não sobrescreve variável que já existe no ambiente, então o que está aqui
-    # vence o .env do host. É o que permite manter um único .env servindo tanto a execução
-    # nativa no WSL (Stockfish em ~/.local/bin, SQLite) quanto os containers, sem editar
-    # nada ao trocar de um para o outro.
+    # phpdotenv does not overwrite a variable that already exists in the environment, so
+    # what is set here wins over the host's .env. That is what lets a single .env serve both
+    # the native run on the host (Stockfish in ~/.local/bin, SQLite) and the containers,
+    # with nothing to edit when switching between them.
     environment:
       APP_ENV: local
       APP_DEBUG: "true"
+      # The host UID has no entry in the image's /etc/passwd, so HOME would be "/", which
+      # nothing may write to. Tools that keep state in the home directory -- psysh, behind
+      # artisan tinker -- fail on that.
       HOME: /tmp
       DB_CONNECTION: mysql
       DB_HOST: mysql
@@ -28,20 +31,17 @@ services:
       CACHE_STORE: redis
       STOCKFISH_PATH: /usr/local/bin/stockfish
     volumes:
-      # Código do host por cima da imagem: alterar um arquivo vale na próxima requisição.
+      # Host code over the image: editing a file takes effect on the next request.
       - .:/var/www/html
-      # Listas de volumes são mescladas entre os arquivos do compose, com dedupe pelo
-      # caminho de destino -- não substituídas. Declarar o mesmo destino aqui é o que anula
-      # os volumes nomeados do compose base, que em produção guardam estado entre deploys e
-      # aqui só atrapalhariam: nascem com dono www-data e o container roda com o seu UID.
+      # Volume lists are merged across compose files, deduplicated by target path -- not
+      # replaced. Declaring the same target here is what cancels the base file's named
+      # volumes, which in production carry state across deploys and here would only get in
+      # the way: they are created owned by www-data while the container runs as your UID.
       - ./storage:/var/www/html/storage
-      # Somente leitura de propósito: o entrypoint testa se /srv/public é gravável para
-      # decidir se copia public/ para lá. Em desenvolvimento não deve copiar -- o Caddy já
-      # lê ./public do disco -- e um bind gravável faria o cp copiar sobre si mesmo.
+      # Read-only on purpose: the entrypoint tests whether /srv/public is writable to decide
+      # whether to copy public/ into it. In development it must not -- Caddy already reads
+      # ./public from disk -- and a writable bind would make the copy run over itself.
       - ./public:/srv/public:ro
-    # O código montado pertence ao seu usuário no host. Sem isto, o processo dentro do
-    # container escreve em storage/ como www-data e os arquivos aparecem como de outro dono
-    # no WSL -- ou nem chegam a ser escritos.
     user: "${UID:-1000}:${GID:-1000}"
 
   worker:
@@ -51,6 +51,7 @@ services:
     image: stockfish-mcp:dev
     environment:
       APP_ENV: local
+      HOME: /tmp
       DB_CONNECTION: mysql
       DB_HOST: mysql
       DB_PORT: "3306"
@@ -66,23 +67,24 @@ services:
 
   web:
     environment:
-      # Sem domínio, o Caddy serve HTTP puro e não tenta emitir certificado.
+      # With no domain, Caddy serves plain HTTP and does not attempt a certificate.
       SITE_ADDRESS: ":80"
     ports:
       - "8080:80"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Mesmo destino do compose base, então substitui o volume nomeado: em desenvolvimento
-      # o Caddy lê public/ direto do disco, e uma alteração vale na hora.
+      # Same target as the base file, so it replaces the named volume: in development Caddy
+      # reads public/ straight from disk and a change takes effect immediately.
       - ./public:/var/www/html/public:ro
 
-  # Roda a suíte com um ambiente próprio, e por isso é um serviço e não um `exec` no app.
+  # Runs the suite with an environment of its own, which is why it is a service and not an
+  # `exec` into app.
   #
-  # As variáveis do container têm precedência sobre o .env -- é o comportamento certo para
-  # produção, e o que atrapalha aqui: `exec app vendor/bin/phpunit` herdaria APP_ENV=local,
-  # CACHE_STORE=redis e o MySQL real, e a suíte passaria a depender do estado deles. Nem
-  # force="true" no phpunit.xml resolve, porque o helper env() do Laravel lê do repositório
-  # do Dotenv, que já foi populado pelo ambiente.
+  # A container's environment takes precedence over .env -- the right behaviour in
+  # production, and the problem here: `exec app vendor/bin/phpunit` would inherit
+  # APP_ENV=local, CACHE_STORE=redis and the real MySQL, and the suite would start depending
+  # on their state. force="true" in phpunit.xml does not settle it either, because Laravel's
+  # env() reads from the Dotenv repository, which the environment has already populated.
   #
   #   docker compose run --rm test
   #
@@ -110,9 +112,9 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     command: vendor/bin/phpunit
 
-  # Expostos só para inspeção do host (cliente de banco, redis-cli). Portas altas de
-  # propósito: 3307 e 6380 costumam já estar tomadas por outros serviços, e o Docker
-  # Desktop falha o `up` inteiro quando uma delas está ocupada.
+  # Exposed only for inspection from the host (a database client, redis-cli). High ports on
+  # purpose: 3307 and 6380 are often already taken, and Docker Desktop fails the whole `up`
+  # when one of them is.
   mysql:
     ports:
       - "13306:3306"

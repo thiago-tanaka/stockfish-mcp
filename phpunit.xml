@@ -18,9 +18,9 @@
         </include>
     </source>
     <!--
-        force="true" em todas. Sem isso o PHPUnit só define a variável quando ela ainda não
-        existe, e qualquer ambiente que já exporte APP_ENV ou CACHE_STORE (um container, um
-        runner de CI) muda como a suíte roda sem avisar.
+        force="true" on all of them. Without it PHPUnit only sets a variable that is not
+        already in the environment, and anything exporting APP_ENV or CACHE_STORE first (a
+        container, a CI runner) silently changes how the suite runs.
     -->
     <php>
         <env name="APP_ENV" value="testing" force="true"/>
